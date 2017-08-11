@@ -1,0 +1,525 @@
+---
+title: "Alternative Splice Evolution following WGD"
+author: "manu/simen/yamile"
+date: "August 2017"
+output: pdf_document
+---
+
+# Analyses of gene-level evolution of alternative splicing following WGD
+Here use analyse the evolution of alternative splicing folowing WGD in two vertebrate genomes, the autotetraploid *Salmo salar* (atlantic salmon) genome and the allotetraploid frog *Xenopus laevis* (African clawed frog). We use gene-level estimates of alternative splice variants and compare these to the alternative splice patterns in un-duplicated sister lineages Esox lucius and X. tropicalis.  
+
+## Methods
+### Identification of gene triplets in *S. salar*
+We used a combination of synteny information, sequence similarity and gene tree topology to identify duplicated genes originating from the salmonid WGD (**referred to as Ss4R**), genes withour a Ss4R duplicate, and their un-dupicated ortholog in pike.  
+In brief we...:
+
+* Used longest protein translation from each gene model was used in a self blastp search (evalue<1e^10)
+* Selfblast results were filtered to only contain significant hits between gene loci located in pre-defined duplicated blocks originating from Ss4R
+* Blast hits were filtered using:
+    + minimum pident > 80%
+    + minimum hit coverage (reciprocal) > 50
+* Best hit were assigned 'putative duplicates based on blast+synteny'
+* Gene tre topologies were then used to:
+    + remove putative duplicate pairs that did not belong to the same gene family
+    + remove putative duplicate pairs that represented older non-Ss4R paralogs
+* Only salmon duplicates (and singletons) from gene trees with a single E. lucius ortholog was included.
+
+### Identification of gene triplets in *S. salar*
+*To be added*
+
+### Estimation of alternative splicing 
+*To be added* 
+
+
+```{r setup, include=FALSE, echo=FALSE, warning=FALSE}
+
+#------------------------------------------#
+##____ libraries, functions, and data ____##
+#------------------------------------------#
+
+# dependencies - packages
+library(plyr); library(dplyr);library(readr);library(tidyr); library(httr)
+library(ape); library(phangorn); library(data.table)
+
+# dependencies home brewed functions
+source('https://raw.githubusercontent.com/srsand/Phylogenomics/master/Phylo_functions.R')
+source('https://raw.githubusercontent.com/srsand/Phylogenomics/master/auto.root_salmonid_clans.R')
+source('https://raw.githubusercontent.com/srsand/Phylogenomics/master/clanfinder.R')
+
+
+
+```
+
+
+```{r ssal_dup_classification_dataprep, echo=F}
+
+#-------------------------------------------------#
+##____ make initial clans from protein trees ____##
+#-------------------------------------------------#
+
+# 1) load orthotrees from Dropbox - dependent on httr pckage
+#response <- GET(url='https://www.dropbox.com/s/lk4110ratmy2oke/OG_trees.30.05.2017.RData?dl=1') # this is V3 pike genome...V2 used for VAST-tools...
+response <- GET(url='https://www.dropbox.com/s/racdawmylh5lv4v/Orthofinder_trees_GarethJan2016.RData?dl=1')
+load(rawConnection(response$content))
+trees = Orthofinder_trees_GarethMarch2016
+trees = trees[sapply(trees, Ntip)>=4]
+
+
+# 2) make clans using clanfinder-function
+OG_clanfinder = lapply(trees, clanFinder, ut = c('Olat', 'Gacu', 'Drer', 'Locu', 'Mmus', 'Hsap'))
+
+# fix names of clans
+OG_clanfinder.filt <- OG_clanfinder[sapply(OG_clanfinder, length)>0]
+clans.num <- as.numeric(unlist(sapply(OG_clanfinder.filt, function(i) 1:length(i))))
+OG_clans = unlist(OG_clanfinder.filt, recursive = F)
+names(OG_clans) <- paste(substr(names(OG_clans), 1, 9), paste(clans.num, '.', sep=''), sep='_')
+
+
+##---------------------------------------------------------------------##
+###      making tables with triplets:  Sal dups + pike orhtolog       ###
+##---------------------------------------------------------------------##
+
+ssal.d <- fread('https://www.dropbox.com/s/13164278mu1rfc4/Ssal_RefSeq_2017_Ss4R_ohnologs_blastidentification_minpident80.txt?dl=1', data.table=F)
+
+dups.inclans.ssal = sapply(OG_clans, function(i) {
+  tips = substr(i$tip.label, 6, 100) 
+  qs = na.omit(match(tips, ssal.d$qseqid))
+  ss = na.omit(match(tips, ssal.d$sseqid))
+  if(length(qs)==0 | length(ss)==0 ) return(NA)
+  qs.gene = ssal.d$qseqid[qs]; ss.gene = ssal.d$sseqid[ss]
+  length(c(qs.gene, ss.gene))
+  }
+)
+
+## number of clans that have n number of pre-defined ohnologs within the clan
+#table(dups.inclans.ssal, useNA = 'always')
+
+# retaining only clans with exactly 2 salmon duplicates ==> avoid complicating paralog structures...
+OG_clans_dups = OG_clans[which(dups.inclans.ssal==2)]
+#length(OG_clans_dups)
+
+# get clans with single eluc
+OG_clans_dups <- OG_clans_dups[which(sapply(OG_clans_dups, function(i) length(grep('Eluc', i$tip.label)))==1)]
+#length(OG_clans_dups)
+
+# topology-check ==> eluc sister to both ssal ohnologs
+OG_clans_dups_rooted = lapply(lapply(OG_clans_dups, auto.root), '[[', 1)
+
+
+
+topo.classification = sapply(OG_clans_dups_rooted, function(i){
+  tips = substr(i$tip.label, 6, 100)
+  qs = na.omit(match(tips, ssal.d$qseqid))
+  ss = na.omit(match(tips, ssal.d$sseqid))
+  if(qs!=ss) return('something wrong - no ohnologs in clan')
+  
+  qs.gene = paste('Ssal|', ssal.d$qseqid[qs], sep=''); ss.gene = paste('Ssal|', ssal.d$sseqid[ss], sep='')
+  
+  spec.in.ss4r.clade = substr(i$tip.label[unlist(Descendants(i, getMRCA(i, c(qs.gene, ss.gene))))], 1, 4)
+  if(sum(spec.in.ss4r.clade %in% 'Ssal')!=2) return('something wrong - more ssal than ohnologs in ss4r clade')
+  if(!'Eluc' %in% spec.in.ss4r.clade) return('ssal.mono')
+  if(!any(c('Drer', 'Gacu', 'Olat', 'Mmus', 'Hsap') %in% spec.in.ss4r.clade)) return('ssaleluc.mono')
+  else return('crap')
+})
+
+#table(topo.classification)
+OG_clans_dups_topofilt <- OG_clans_dups_rooted[which(topo.classification %in% c('ssaleluc.mono', 'ssal.mono'))]
+
+ohnolog_table = data.frame(t(sapply(OG_clans_dups_topofilt, function(i) {
+  tips = substr(i$tip.label, 6, 100)
+  qs = na.omit(match(tips, ssal.d$qseqid))
+  ss = na.omit(match(tips, ssal.d$sseqid))
+  c(class='duplicated', ssal1=ssal.d$qseqid[qs], ssal2= ssal.d$sseqid[ss], eluc=substr(grep('Eluc', i$tip.label, value = T), 6, 100))
+  }
+)), stringsAsFactors = F)
+
+#head(ohnolog_table)
+ohnolog_table <- data.frame(.id=rownames(ohnolog_table), ohnolog_table, stringsAsFactors = F)
+#str(ohnolog_table)
+rownames(ohnolog_table) <- NULL
+
+#-->  singleton table
+
+clan.single = sapply(OG_clans, function(i){
+  if(any(i$tip.label %in% c(ssal.d$qseqid, ssal.d$sseqid))) return('ohnologs in clan')
+  if(length(grep('Ssal', i$tip.label))!=1) return('Not single ssal')
+  if(length(grep('Ssal', i$tip.label))==1 & length(grep('Eluc', i$tip.label))==0) return('Single ssal - No eluc')
+  if(length(grep('Ssal', i$tip.label))==1 & length(grep('Eluc', i$tip.label))>1)  return('Single ssal - mulicopy eluc')
+  if(length(grep('Ssal', i$tip.label))==1 & length(grep('Eluc', i$tip.label))==1)  return('Single ssal - Single eluc')
+  else return('crap')
+  }
+)
+#table(clan.single)
+clans.single = OG_clans[which(clan.single=='Single ssal - Single eluc')]
+
+clan.single.df = ldply(clans.single, function(i){
+  data.frame(class='singletons', ssal1=substr(grep('Ssal', i$tip.label, value = T), 6, 100), ssal2=NA, eluc=substr(grep('Eluc', i$tip.label, value = T), 6, 100), stringsAsFactors = F) 
+  }
+)
+
+
+ssal.triplets = rbind(ohnolog_table, clan.single.df)
+#str(ssal.triplets)
+
+
+
+
+```
+
+
+```{r produce_protein_gene_conversion_table, echo=F}
+
+############################################################
+## make lookup table between genes-proteins-clans ##
+############################################################
+
+#head(ssal.triplets)
+
+
+#library(devtools)
+#install_github("FabianGrammes/Ssa.RefSeq.db")
+suppressMessages(library(Ssa.RefSeq.db, quietly = T, warn.conflicts = F))
+all = get.id('*')
+
+#--> read pike gff
+gff.lines = readLines('https://www.dropbox.com/s/d72xtx6k9b1lj63/GCF_000721915.2_ASM72191v2_genomic.gff?dl=1')
+#--> fix gene-2-protein table for pike
+gff.geneid = gff.lines[grep('ID=gene', gff.lines)]
+gene_id = sub(';.*', '', sub(';.*', '', sub('.*ID=', '', gff.geneid)))
+loc_id = sub(';.*', '', sub(';.*', '', sub('.*Dbxref=GeneID:', '', gff.geneid)))
+gene_loc = cbind(gene_id, loc_id)
+gff.protid = gff.lines[grep('protein_id', gff.lines)]
+prot_id = sub(';.*', '', sub(';.*', '', sub('.*protein_id=', '', gff.protid)))
+loc_id = sub(',.*', '', sub(';.*', '', sub('.*Dbxref=GeneID:', '', gff.protid)))
+loc_prot = cbind(loc_id, prot_id)
+# all merge 
+lookup_elu = merge(gene_loc, loc_prot, by='loc_id')
+
+
+
+#--> mapping between vaast tools IDs and genes/proteins
+elu.map_new.old  = read.table('https://www.dropbox.com/s/ukrfcj0j0864180/Elu-New-to-old-GeneID.txt?dl=1', stringsAsFactors = F)
+elu.map_geneid  = read.table('https://www.dropbox.com/s/mv0lx1vdi7d1ybs/Elu.Event-Gene.IDs.txt?dl=1', stringsAsFactors = F)
+ssa.map_new.old  = read.table('https://www.dropbox.com/s/n0pxldctk0kjtah/Ssa-New-to-old-GeneID.txt?dl=1', stringsAsFactors = F)
+ssa.map_geneid  = read.table('https://www.dropbox.com/s/s1cxv6aum29kr2g/Ssa.Event-Gene.IDs.txt?dl=1', stringsAsFactors = F)
+ssal.triplets$pike_geneID  <- as.character(lookup_elu$gene_id[match(ssal.triplets$eluc, lookup_elu$prot_id)])
+ssal.triplets$ssal1_geneID <- all$gene_id[match(ssal.triplets$ssal1, all$protein_id)]
+ssal.triplets$ssal2_geneID <- all$gene_id[match(ssal.triplets$ssal2, all$protein_id)]
+ssal.triplets$pike_AltExID <- elu.map_new.old$V2[match(ssal.triplets$pike_geneID, elu.map_new.old$V1)]
+ssal.triplets$ssal1_AltExID <- ssa.map_new.old$V2[match(ssal.triplets$ssal1_geneID, sub('_',':',  ssa.map_new.old$V1))]
+ssal.triplets$ssal2_AltExID <- ssa.map_new.old$V2[match(ssal.triplets$ssal2_geneID, sub('_',':',  ssa.map_new.old$V1))]
+
+
+
+
+```
+
+```{r get_TRULY_Altx_ssa, echo=F}
+
+
+#--> getting TRULY filteres AltEx's
+elu.tryly = fread('https://www.dropbox.com/s/43yvwasmnzzc8hr/INCLUSION_LEVELS_FULL-Elu28_repA-pIR-N3.trulyAS2.txt?dl=1', data.table=F)
+ssa.tryly = fread('https://www.dropbox.com/s/1ky192woeo07i9e/INCLUSION_LEVELS_FULL-Ssa29_repA-pIR-N3.trulyAS2.txt?dl=1', data.table=F)
+elu.tryly = subset(elu.tryly, elu.tryly$TYPE %in% c('SuperAS'))
+ssa.tryly = subset(ssa.tryly, ssa.tryly$TYPE %in% c('SuperAS'))
+
+
+#--> making subsetted dataframe from TRULY results
+
+elu_events.pr.gene = table(elu.map_geneid$V2[match(elu.tryly$EVENT, elu.map_geneid$V1)])
+ssa_events.pr.gene = table(ssa.map_geneid$V2[match(ssa.tryly$EVENT, ssa.map_geneid$V1)])
+
+ssal.triplets$pike_AltEx_counts   = elu_events.pr.gene[match(ssal.triplets$pike_AltExID,   names(elu_events.pr.gene))]
+ssal.triplets$ssal1_AltEx_counts = ssa_events.pr.gene[match(ssal.triplets$ssal1_AltExID, names(ssa_events.pr.gene))]
+ssal.triplets$ssal2_AltEx_counts = ssa_events.pr.gene[match(ssal.triplets$ssal2_AltExID, names(ssa_events.pr.gene))]
+ssal.triplets$pike_AltEx_counts[is.na(ssal.triplets$pike_AltEx_counts)] <- 0
+ssal.triplets$ssal1_AltEx_counts[is.na(ssal.triplets$ssal1_AltEx_counts)] <- 0
+ssal.triplets$ssal2_AltEx_counts[is.na(ssal.triplets$ssal2_AltEx_counts)] <- 0
+
+#--> removing genes with zero splice variants 
+any.splice.idx = (ssal.triplets$pike_AltEx_counts>0) | (ssal.triplets$ssal1_AltEx_counts >0) | (ssal.triplets$ssal2_AltEx_counts >0)
+#table(any.splice.idx, useNA = 'always')
+ssal.triplets_clean = ssal.triplets[any.splice.idx, ]
+#str(ssal.triplets_clean)
+#dim(ssal.triplets_clean) # 5828 genes with minimum one splicing event...
+#head(ssal.triplets_clean)
+
+```
+
+
+```{r frog_data_prep, echo=F}
+#################################
+# make ohnolog, ortholog tables #
+#################################
+
+frog_dups = read.table('https://www.dropbox.com/s/hgktha13maacj3p/homeologues_Xtr_Xla_Gga_Hsa_Mmu_V2.txt?dl=1', stringsAsFactors = F, sep='\t', fill = T, header = T)
+frog_sing = read.table('https://www.dropbox.com/s/7mo2ijjxa1lr5kx/singletons_Xtr_Xla_Gga_Hsa_Mmu.txt?dl=1', stringsAsFactors = F, sep='\t', fill = T, header = T)
+#length(unique(frog_dups$GeneID_Xtr))
+#length(unique(frog_sing$GeneID_Xtr))
+
+# some Gene_name_Xtr are redundant due to genes called xxx-like in Xla
+counts.dup <- frog_dups %>% group_by(Gene_name_Xtr) %>% summarise(counts = n()) 
+#table(counts.dup$counts)
+#filter(frog_dups, Gene_name_Xtr %in% filter(counts.dup, counts!=2)$Gene_name_Xtr)
+counts.sing <- frog_sing %>% group_by(Gene_name_Xtr) %>% summarise(counts = n()) 
+#filter(frog_sing,  Gene_name_Xtr %in% filter(counts.sing, counts!=1)$Gene_name_Xtr )
+
+#3 removing these 3 complex gene clusters for simplicity of analyses
+frog_dups = filter(frog_dups, Gene_name_Xtr %in% filter(counts.dup, counts==2)$Gene_name_Xtr)
+frog_sing = filter(frog_sing, Gene_name_Xtr %in% filter(counts.sing, counts==1)$Gene_name_Xtr)
+
+## Need to find out why some endings are '1' and the .S and .L endings do not add up!!
+## need to add collumn with L/S (subgenome collumn)
+frog_dups$subgenome <- sub('.*\\.', '', frog_dups$Gene_name_Xla)
+frog_dups <- filter(frog_dups, !Gene_name_Xtr %in% 'gngt2.1') # must remove gngt2.1 locus as this locus contains two 'L' genes
+frog_dups_tab = ddply(frog_dups, .(Gene_name_Xtr), function(i) data.frame(Xla1=i$GeneID_Xla[match('L', i$subgenome)], Xla2=i$GeneID_Xla[match('S', i$subgenome)], Xla1_subgenome='L', Xla2_subgenome='S', GeneID_Xtr = i$GeneID_Xtr[1], stringsAsFactors = F))
+frog_dups_tab <- cbind(class=rep('duplicated'), frog_dups_tab)
+frog_dups_tab <- rename(frog_dups_tab,   Gene_name = Gene_name_Xtr)
+#head(frog_dups_tab)
+
+## merge dup and singleton tables
+#head(frog_sing)
+#table(sub('.*\\.', '', frog_sing$Gene_name_Xla)) # the retained singletons seriously biased towards 'L' genome
+frog_sing_tab = data_frame(class=rep('singletons', nrow(frog_sing)), Gene_name=frog_sing$Gene_name_Xtr, Xla1=frog_sing$GeneID_Xla, Xla2=rep(NA, nrow(frog_sing)), Xla1_subgenome = sub('.*\\.', '', frog_sing$Gene_name_Xla), Xla2_subgenome = rep(NA, nrow(frog_sing)), GeneID_Xtr = frog_sing$GeneID_Xtr)
+#head(frog_sing_tab)
+
+# combine gene annotation tables 
+#head(frog_dups_tab)
+#head(frog_sing_tab)
+frog.triplets = rbind(frog_dups_tab, frog_sing_tab)
+#head(frog.triplets)
+#dim(frog.triplets)
+
+frog.triplets$class <- as.character(frog.triplets$class)
+#filter(frog.triplets, class=='singletons')
+############################################################
+## make lookup table between genes-proteins-clans ##
+############################################################
+
+xtr.lookup = fread('https://www.dropbox.com/s/9r0chr9bi5mgjrh/Xtr.Event-Gene.IDs.txt?dl=1', data.table=F)
+xla.lookup = fread('https://www.dropbox.com/s/yrd402nm1oxmxf4/Xla.Event-Gene.IDs.txt?dl=1', data.table=F)
+#head(xla.lookup)
+#tail(xla.lookup)
+
+
+#########################
+## get raw PSI results ##
+#########################
+
+xtr.psi.filt = fread('https://www.dropbox.com/s/qrnav3hytsv76do/INCLUSION_LEVELS_FULL-Xtr19_match-pIR-N3.trulyAS2.txt?dl=1', data.table = F)
+xtr.psi.filt = subset(xtr.psi.filt, TYPE %in% 'SuperAS')
+xla.psi.filt = fread('https://www.dropbox.com/s/9d9tsldttc8em99/INCLUSION_LEVELS_FULL-Xla19_match-pIR-N3.trulyAS2.txt?dl=1', data.table = F)
+xla.psi.filt = subset(xla.psi.filt, TYPE %in% 'SuperAS')
+#head(xtr.psi.filt)
+#head(xla.psi.filt)
+
+
+############################
+## add counts to triplets ##
+############################
+
+##==> add AS counts to tables pr gene
+
+xtr_events.pr.gene = table(xtr.lookup$GeneID[match(xtr.psi.filt$EVENT, xtr.lookup$EventID)])
+xla_events.pr.gene = table(xla.lookup$GeneID[match(xla.psi.filt$EVENT, xla.lookup$EventID)])
+
+frog.triplets$Xtr_AltEx_counts  <-    xtr_events.pr.gene[match(frog.triplets$GeneID_Xtr, names(xtr_events.pr.gene))]
+frog.triplets$Xla1_AltEx_counts <-    xla_events.pr.gene[match(frog.triplets$Xla1, names(xla_events.pr.gene))]
+frog.triplets$Xla2_AltEx_counts <-    xla_events.pr.gene[match(frog.triplets$Xla2, names(xla_events.pr.gene))]
+#filter(frog.triplets, class=='singletons')
+#filter(frog.triplets, class=='duplicated')
+
+
+frog.triplets$Xtr_AltEx_counts[is.na(frog.triplets$Xtr_AltEx_counts)] <- 0
+frog.triplets$Xla1_AltEx_counts[is.na(frog.triplets$Xla1_AltEx_counts)] <- 0
+frog.triplets$Xla2_AltEx_counts[is.na(frog.triplets$Xla2_AltEx_counts)] <- 0
+idx.any = (frog.triplets$Xla1_AltEx_counts>0)|(frog.triplets$Xla2_AltEx_counts>0)|(frog.triplets$Xtr_AltEx_counts>0)
+frog.triplets_clean <- frog.triplets[idx.any,]
+#dim(frog.triplets_clean)
+frog.triplets_clean <- filter(frog.triplets_clean, Xla1_subgenome!=1|Xla2_subgenome!=1)
+#dim(frog.triplets_clean)
+#head(frog.triplets_clean)
+#str(frog.triplets_clean)
+
+```
+
+
+## Results
+### Genome wide identification of gene duplicates from WGD 
+We identified `r nrow(ssal.d)` putative Ss4R duplicate pairs from synteny and 'best hit' filtering of the selfblastp search. Out of these `r length(OG_clans_dups)` pairs were found to belong to the same ortholog gene tree. After filtering on gene tree topology and the presence of a single E. lucus ortholog we were left with `r sum(ssal.triplets$class == 'duplicated')` gene triplets representing two salmon duplicates originating fom Ss4R WGD and their ortholog in the un-duplicated E. lucius genome. Number of 1:1 orthologs (salmon:pike, i.e. singletons) were `r sum(ssal.triplets$class == 'singletons')`.
+
+The frog duplicates and singletons were extracted from 'the frog paper'/Xenbase. The original duplicate table contained `r length(unique(filter(frog.triplets, class=='duplicated')$GeneID_Xtr))` putative 2:1 ortholog relationships to the non-duplicated Xenopus tropicalis and `r length(unique(filter(frog.triplets, class=='singletons')$GeneID_Xtr))`.  
+
+### Gene-level alternative exon usage
+Level of alternative exon usage per gene locus was extracted from the VAST-tools output (files named 'trulyAS2') (Table 1). We filtered the raw VAST-tools output on reliability classification (i.e. 'superAS') and merged this with the ortholog triplet dataset (see above paragraph).   
+
+
+```{r table1, results='asis', echo=FALSE}
+  library(xtable)
+  vast.SuperAS = c(xla=nrow(xla.psi.filt),  ssa=nrow(ssa.tryly))
+  vast.SuperAS_dups = 
+    c(xla=nrow(filter(frog.triplets_clean, class=='duplicated')), ssa=nrow(filter(ssal.triplets_clean, class=='duplicated')))
+vast.SuperAS_sing = 
+    c(xla=nrow(filter(frog.triplets_clean, class=='singletons')), ssa=nrow(filter(ssal.triplets_clean, class=='singletons')))
+ 
+
+#why some without gene name??
+all.xla.genes = filter(xla.psi.filt, GENE != '')
+all.xla.genes$GeneID = xla.lookup$GeneID[match(all.xla.genes$EVENT, xla.lookup$EventID)]
+events_pr_gene = all.xla.genes %>% group_by(GeneID) %>% summarise(events=n())
+xla.all.genes_meanEvents = mean(events_pr_gene$events)
+all.xla.genes$Gene_name <- sub('\\..*', '', all.xla.genes$GENE)
+all.xla.genes$Subgenome <- sub('.*\\.', '', all.xla.genes$GENE)
+xla.genes_dups_meanEvents = mean(frog.triplets_clean$Xla1_AltEx_counts[frog.triplets_clean$class=='duplicated']+frog.triplets_clean$Xla2_AltEx_counts[frog.triplets_clean$class=='duplicated'])
+xla.genes_sing_meanEvents = mean(frog.triplets_clean$Xla1_AltEx_counts[frog.triplets_clean$class=='singletons'])  
+frog.vast.Events.pergene = c(vast.SuperAS=xla.all.genes_meanEvents, vast.SuperAS_dups=xla.genes_dups_meanEvents , vast.SuperAS_sing=xla.genes_sing_meanEvents)
+
+
+all.ssa.genes = filter(ssa.tryly, GENE != '')
+events_pr_gene = all.ssa.genes %>% group_by(GENE) %>% summarise(events=n())
+ssa.all.genes_meanEvents = mean(events_pr_gene$events)
+ssa.genes_dups_meanEvents = mean(ssal.triplets_clean$ssal1_AltEx_counts[ssal.triplets_clean$class=='duplicated']+ssal.triplets_clean$ssal2_AltEx_counts[ssal.triplets_clean$class=='duplicated'])
+ssa.genes_sing_meanEvents = mean(ssal.triplets_clean$ssal1_AltEx_counts[ssal.triplets_clean$class=='singletons'])  
+ssal.vast.Events.pergene = c(vast.SuperAS=ssa.all.genes_meanEvents, vast.SuperAS_dups=ssa.genes_dups_meanEvents , vast.SuperAS_sing=ssa.genes_sing_meanEvents)
+
+res= cbind(Type=c('Xla_ASevents', 'Ssa_ASevents', 'Frog_ASevents_perGene', 'Ssa_ASevents_perGene'), rbind(data_frame(vast.SuperAS, vast.SuperAS_dups, vast.SuperAS_sing), round(frog.vast.Events.pergene,1), round(ssal.vast.Events.pergene, 1)))
+
+print(xtable(res, caption = 'Summary of AS events included in analyses'))
+  
+  # add collumn with mean dup AES
+```
+
+### Duplicate evolution of gene-level alternative exon usage
+To analyse the gene-level evolution of AS events (loss or gain) following WGD we calculated the difference between AS events between WGD duplicates and their un-duplicates orthologs. The results are plotted as barplots in Figure 1. If partitioning of AS events are symmetric among the WGD duplicates (as suggested by some) then we would expect the barplots in the first and second rows in collumn 1 and 2 to be similar to eachother. This is obviously not the case, as the duplicate copy with the 'fewest' detected AS events ('less' in the figure headings) have MUCH fewer AS events compared to the unduplicated sister group we are comparing against.  
+
+The higher AS events in pike compared to salmon (not seen for frogs) we interpret to be related to the technical ability to detect AS events when duplicates are really similar at the CDS level.  This is backed up by the AS event distribution for singleton genes (Figure 2) where clearly pike has more AS compared to salmon on average, while the frog comparison seems perfectly balanced.   
+
+* NOTE: Must correct for gene expression levels as these can influence the detection of AS events.. How should we approach this? 
+    + Simply filter out genes that are equal in expression levels?
+    + Plot fpkm's difference as boxplot for 'low AS' duplicates versus 'high AS' duplicates
+
+```{r plotting, echo=F, fig.cap='Figure1: Difference distribution in AS events per gene for WGD duplicates.'}
+
+
+plot.ASdifference=function(raw.counts.tables, pretty.plotting=T, y.max, arrow.y, main.lab){
+  
+  c2rgb=function(col.in, alpha.co){
+  co = as.numeric(col2rgb(col.in))
+  rgb(red=co[1]/255, green=co[2]/255, blue=co[3]/255, alpha=alpha.co)
+}
+
+  
+  # fixing table
+    barplot.table=raw.counts.tables
+    range.counts=c(-22, 22)
+    base.names = seq(range.counts[1], range.counts[2], 1)
+    base.plot = rep(0, length(base.names)); names(base.plot) <- base.names
+    bartable = barplot.table[match(names(base.plot), names(barplot.table))]
+    bartable[is.na(bartable)] <- 0 ; names(bartable) <- names(base.plot)
+  
+  # colours 
+  cols = seq(-100, 100, by = 1); names(cols) <- rep(c2rgb('red', 0.5), length(cols)); names(cols)[cols>0] <- c2rgb('blue', 0.5); names(cols)[cols==0] <- 'grey'
+  
+
+    bp1 = barplot(bartable, 
+                  col = names(cols)[match(as.numeric(names(bartable)), cols)],
+                  main=paste(main.lab, paste('N=', sum(raw.counts.tables), sep=''), sep='\n'), ylim=c(0,y.max))
+
+    arrows(x0 = bp1[which(as.numeric(names(bartable))==0)]-1, x1 = bp1[which(as.numeric(names(bartable))==-10)]+4, y0 = arrow.y, length = 0.1, col='red')
+    arrows(x0 = bp1[which(as.numeric(names(bartable))==0)]+1, x1 = bp1[which(as.numeric(names(bartable))==10)]-4, y0 = arrow.y, length = 0.1, col='blue')
+    text('More in diploid',   x = bp1[which(as.numeric(names(bartable))==0)]-10, y = arrow.y+(arrow.y*0.1), pos=2, col='red')
+    text('More in tetraploid', x = bp1[which(as.numeric(names(bartable))==0)]+10, y = arrow.y+(arrow.y*0.1), pos=4,  col='blue')
+}  
+ 
+
+
+## ==> ranking duplicates
+add.rank.dups = function(triplet.table=ssal.triplets_clean, species.tag = 'ssal'){
+  idx.cols = grep(paste(species.tag, '[a-z0-9]', '_AltEx_counts', sep=''), colnames(triplet.table))
+  triplet.table_sorted <- triplet.table
+  dups = cbind(triplet.table[,idx.cols[1]], triplet.table[,idx.cols[2]])
+  rownames(dups) <- NULL
+  dups.sort = data.frame(t(apply(dups, 1, function(i) c(min(i), max(i)))))
+  triplet.table_sorted$dup_min_count <- dups.sort$X1
+  triplet.table_sorted$dup_max_count <- dups.sort$X2
+  filter(triplet.table_sorted, class=='duplicated')
+}
+
+ssal.triplets_dupsorted = add.rank.dups(ssal.triplets_clean, species.tag='ssal')
+frog.triplets_dupsorted = add.rank.dups(frog.triplets_clean, species.tag='Xla')
+
+
+## plot sal:
+
+pike.ssalmin = table(ssal.triplets_dupsorted$dup_min_count- ssal.triplets_dupsorted$pike_AltEx_counts)
+pike.ssalmax = table(ssal.triplets_dupsorted$dup_max_count - ssal.triplets_dupsorted$pike_AltEx_counts)
+count.diff.sum.ssal <- table((ssal.triplets_dupsorted$dup_min_count + ssal.triplets_dupsorted$dup_max_count) - as.numeric(ssal.triplets_dupsorted$pike_AltEx_counts))
+
+## plot frog:
+
+xtr.xlamin = table(frog.triplets_dupsorted$dup_min_count- frog.triplets_dupsorted$Xtr_AltEx_counts)
+xtr.xlamax = table(frog.triplets_dupsorted$dup_max_count - frog.triplets_dupsorted$Xtr_AltEx_counts)
+count.diff.sum.frog <- table((frog.triplets_dupsorted$dup_min_count + frog.triplets_dupsorted$dup_max_count) - as.numeric(frog.triplets_dupsorted$Xtr_AltEx_counts))
+
+par(mfrow=c(3,2), mar=c(3,3,2,1))
+plot.ASdifference(raw.counts.tables = pike.ssalmin , 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Ssal_lessAS-esox: TRULYsuper-PSI')
+
+plot.ASdifference(raw.counts.tables = xtr.xlamin, 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Frog_lessAS-esox: TRULYsuper-PSI')
+
+
+
+plot.ASdifference(raw.counts.tables = pike.ssalmax, 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Ssal_moreAS-esox: TRULYsuper-PSI')
+
+
+plot.ASdifference(raw.counts.tables = xtr.xlamax, 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Frog_moreAS-esox: TRULYsuper-PSI')
+
+
+plot.ASdifference(raw.counts.tables = count.diff.sum.ssal, 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Ssal_sum-esox: TRULYsuper-PSI')
+
+
+plot.ASdifference(raw.counts.tables = count.diff.sum.frog, 
+                  y.max=1300, arrow.y = 300, 
+                  main.lab = 'Frog_sum-esox: TRULYsuper-PSI')
+
+
+
+```
+
+```{r singleton, echo=F, fig.cap='Figure2: Difference distribution in AS events per gene singleton in tetraploid and unduplicated ortholog. Left: salmon vs pike. Right: frog vs frog.', fig.height=5, fig.width=7}
+
+ssal.triplets_singletons = filter(ssal.triplets_clean, class == 'singletons')
+frog.triplets_singletons = filter(frog.triplets_clean, class == 'singletons')
+
+
+## plot sal:
+
+pike.ssal = table(ssal.triplets_singletons$ssal1_AltEx_counts - ssal.triplets_singletons$pike_AltEx_counts)
+xtr.xla   = table(frog.triplets_singletons$Xla1_AltEx_counts - frog.triplets_singletons$Xtr_AltEx_counts)
+
+## plot frog:
+
+par(mfrow=c(1,2), mar=c(3,3,2,1))
+plot.ASdifference(raw.counts.tables = pike.ssal, 
+                  y.max=800, arrow.y = 300, 
+                  main.lab = 'Ssal_singletons_AS-esox: TRULYsuper-PSI')
+
+plot.ASdifference(raw.counts.tables = xtr.xla , 
+                  y.max=800, arrow.y = 300, 
+                  main.lab = 'Frog_singletons_AS-esox: TRULYsuper-PSI')
+
+
+
+
+```
+
+
